@@ -46,7 +46,7 @@ app.post('/api/tts', async (req, res) => {
 
     const [response] = await ttsClient.synthesizeSpeech({
       input: { text: text },
-      voice: { languageCode: 'en-NZ', name: 'en-GB-Standard-B' },
+      voice: { languageCode: 'en-US', name: 'en-US-Neural2-D' },
       audioConfig: { audioEncoding: 'MP3' },
     });
 

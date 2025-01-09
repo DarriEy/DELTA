@@ -71,7 +71,7 @@ const AnimatedAvatar = () => {
   }, []);
 
   const startListening = () => {
-    if (recognition.current && !isListening) {
+    if (recognition.current && !isListening && currentExpression !== "talking") {
       try {
         setIsListening(true);
         recognition.current.start();
@@ -81,7 +81,7 @@ const AnimatedAvatar = () => {
         setIsListening(false);
       }
     }
-  };
+};
 
   const stopListening = () => {
     if (recognition.current && isListening) {
@@ -96,18 +96,21 @@ const AnimatedAvatar = () => {
       console.warn("Speech recognition result is empty or undefined.");
       return;
     }
-  
+
     setIsListening(false);
-  
-    // Directly use the text for updating conversation history
-    const updatedHistory = [...conversationHistory, { role: "user", content: text }];
-  
     setCurrentExpression("thinking");
-  
+
+    // Update conversation history with user's message
+    const updatedHistory = [
+      ...conversationHistory,
+      { role: "user", content: text },
+    ];
+    setConversationHistory(updatedHistory);
+
     try {
       // Send updated conversation history to LLM
       const llmResponse = await sendToLLM(updatedHistory);
-  
+
       // Update conversation history with LLM's response AFTER receiving it
       if (llmResponse) {
         setConversationHistory([
@@ -121,84 +124,79 @@ const AnimatedAvatar = () => {
     } catch (error) {
       console.error("Error handling speech recognition result:", error);
       setCurrentExpression("error"); // Or some other error handling
-      return; // Prevent speak(undefined) from being called
     } finally {
       setCurrentExpression("neutral");
     }
-  };
+};
 
-  const sendToLLM = async (conversationHistory) => {
-    console.log("Conversation history:", conversationHistory);
-    // Get the last message in the conversation history
-    const userMessage = conversationHistory[conversationHistory.length - 1]?.content;
+const sendToLLM = async (conversationHistory) => {
+  console.log("Conversation history:", conversationHistory);
 
-    // Check if the last message is from the user
-    if (conversationHistory[conversationHistory.length - 1]?.role !== "user") {
-        console.error("Last message in conversation history is not from the user");
-        return;
-    }
+  // Ensure the last message is from the user
+  const lastMessage = conversationHistory[conversationHistory.length - 1];
+  if (!lastMessage || lastMessage.role !== "user") {
+    console.error(
+      "Last message in conversation history is not from the user"
+    );
+    return;
+  }
 
-    const messages = [
-      {
-        role: "user",
-        content: userMessage,
+  const userMessage = lastMessage.content;
+  const messages = [{ role: "user", content: userMessage }];
+
+  console.log("Sending to LLM:", messages);
+
+  try {
+    const response = await fetch("http://localhost:3001/api/anthropic", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-    ];
+      body: JSON.stringify({
+        model: "claude-3-haiku-20240307",
+        max_tokens: 1000,
+        messages: messages,
+      }),
+    });
 
-    console.log("Sending to LLM:", messages);
+    console.log("LLM response status:", response.status);
 
-    let response;
-    try {
-      response = await fetch("http://localhost:3001/api/anthropic", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-2.1",
-          max_tokens: 1000,
-          messages: messages,
-        }),
-      });
-
-      console.log("LLM response status:", response.status);
-
-      if (!response.ok) {
-        console.error("HTTP error! status:", response.status);
-        // Try to read the error response body
-        const errorBody = await response.text();
-        console.error("Error body:", errorBody);
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      console.log("LLM data:", data);
-
-      if (data.error) {
-        console.error("LLM API error:", data.error.message);
-        throw new Error(data.error.message);
-      }
-
-      if (!data.content || data.content.length === 0) {
-        console.error("LLM response missing content:", data);
-        throw new Error("No content received from Anthropic API");
-      }
-
-      const assistantResponse = data.content[0]?.text;
-      if (!assistantResponse) {
-        console.error("LLM response missing assistant text:", data);
-        throw new Error("Assistant response text is missing");
-      }
-
-      return assistantResponse;
-    } catch (error) {
-      console.error("Error in sendToLLM:", error);
-      throw error; // Re-throw the error after logging
+    if (!response.ok) {
+      console.error("HTTP error! status:", response.status);
+      const errorBody = await response.text();
+      console.error("Error body:", errorBody);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-  };
 
-  const speak = async (text) => {
+    let fullResponse = "";
+
+    const data = await response.json();
+    console.log("LLM data:", data);
+    if (data.error) {
+      console.error("LLM API error:", data.error.message);
+      throw new Error(data.error.message);
+    }
+    if (!data.content || data.content.length === 0) {
+      console.error("LLM response missing content:", data);
+      throw new Error("No content received from Anthropic API");
+    }
+    const assistantResponse = data.content[0]?.text;
+    if (!assistantResponse) {
+      console.error("LLM response missing assistant text:", data);
+      throw new Error("Assistant response text is missing");
+    }
+    fullResponse = assistantResponse;
+
+    console.log("Full response from LLM:", fullResponse);
+    return fullResponse;
+  } catch (error) {
+    console.error("Error in sendToLLM:", error);
+    throw error;
+  }
+};
+
+const speak = async (text) => {
+  return new Promise(async (resolve, reject) => {
     console.log("Text to be spoken:", text);
     try {
       const response = await fetch("http://localhost:3001/api/tts", {
@@ -219,29 +217,40 @@ const AnimatedAvatar = () => {
 
       const data = await response.json();
       if (data.audioContent) {
-        const audio = new Audio(
-          "data:audio/mp3;base64," + data.audioContent
-        );
+        const audio = new Audio("data:audio/mp3;base64," + data.audioContent);
         setCurrentExpression("talking");
         audio.play();
-        audio.onended = () => setCurrentExpression("neutral");
+        audio.onended = () => {
+          setCurrentExpression("neutral");
+          resolve(); // Resolve the Promise when audio ends
+        };
+        audio.onerror = (error) => {
+          console.error("Error playing audio:", error);
+          setCurrentExpression("neutral");
+          reject(error); // Reject the Promise on error
+        };
       } else {
         throw new Error("No audio content received from TTS API");
       }
     } catch (error) {
       console.error("Error during text-to-speech:", error);
       setCurrentExpression("neutral");
+      reject(error); // Reject the Promise on error
     }
-  };
+  });
+};
 
-  const handleExpressionChange = (newExpression) => {
+const handleExpressionChange = (newExpression) => {
+  if (newExpression === "talking") {
+    setIsTalking(true);
+    const textToSpeak =
+      "Hi I'm Delta, your personal hydrological research assistant. How should we save the world today?";
+    speak(textToSpeak);
+  } else {
+    setIsTalking(false);
     setCurrentExpression(newExpression);
-    if (newExpression === "talking" && currentExpression !== "talking") {
-      const textToSpeak =
-        "Hi I'm Delta, your personal hydrological research assistant. How should we save the world today?";
-      speak(textToSpeak);
-    }
-  };
+  }
+};
 
   // Toggle talking animation
   useEffect(() => {
